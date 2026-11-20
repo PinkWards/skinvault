@@ -7,6 +7,10 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0a1626">
 <meta name="mobile-web-app-capable" content="yes">
+<meta name="description" content="MLBB skin packs — skins only, download only.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png" sizes="192x192">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>SkinVault — download only</title>
@@ -133,7 +137,7 @@ var MANIFEST = 'https://cdn.jsdelivr.net/gh/injctr/updates@main/kio.json';
 // heroes, most of them on raw.githubusercontent (CORS-friendly). It fills the
 // gaps injctr leaves — a hero whose only target was Collector gets the rest.
 var MOLESKIN = 'https://cdn.jsdelivr.net/gh/MyMasWayVPN/moleskin@main/combined_manifest.json';
-var CACHE_KEY = 'skinvault.index.v18';     // v18 = mirror fallback, short-read guard, card-named files
+var CACHE_KEY = 'skinvault.index.v19';     // v19 = installable PWA, dead-host mirrors refused
 var HERO_ICONS = {};                       // default hero icons, loaded from heroes.json
 var HERO_ALIAS = { 'Lou Yi': 'Luo Yi' };   // manifest spelling -> wiki page spelling
 
@@ -213,6 +217,20 @@ function deriveSkin(key, hero, url){
 // under two folder keys often enough that the count ran ahead of the shelf:
 // only the first URL ever became a button. The second is kept as the mirror
 // and the pack count now matches what a thumb can actually press.
+// Hosts that answer for every path with the same fatal status. Kept as a list
+// rather than a probe because the catalog builds in the browser, before any
+// download has happened, and a 98-URL sweep would stall first paint.
+var DEAD_MIRROR_HOST = /^urpfiajrjfctkizlbulv\.supabase\.co$/i;
+
+// A mirror is a promise that this URL can serve the zip when the first one
+// cannot. A host that 402s on every path is not a mirror, it is a delay.
+function mirrorOk(u){
+  if(!/^https?:/i.test(String(u || ''))) return false;
+  var host = '';
+  try{ host = new URL(u).host; }catch(e){ return false; }
+  return !DEAD_MIRROR_HOST.test(host);
+}
+
 function slotDedupe(list){
   var out = [], byUrl = Object.create(null), bySlot = Object.create(null);
   list.forEach(function(o){
@@ -220,7 +238,7 @@ function slotDedupe(list){
     byUrl[o.url] = 1;
     var k = idKey(o.hero) + '|' + normName(o.skin) + '|' + normName(o.base);
     var prev = bySlot[k];
-    if(prev){ if(!prev.mirror) prev.mirror = o.url; return; }
+    if(prev){ if(!prev.mirror && mirrorOk(o.url)) prev.mirror = o.url; return; }
     bySlot[k] = o;
     out.push(o);
   });
@@ -1252,6 +1270,21 @@ async function pullZip(url, btn){
 // Pull the zip through fetch and hand the phone a blob, so nothing leaves the app:
 // an <a href> download opens a tab and lands on github.raw instead. A card with
 // a second published pack tries it before giving up.
+// One failed attempt is evidence. A host that answered 402 does not get a
+// second chance this session; a single URL that 404s is skipped by address.
+var DEAD_URL = Object.create(null), DEAD_HOST = Object.create(null);
+function hostOf(u){
+  try{ return new URL(u).host; }catch(e){ return ''; }
+}
+function markDead(u, err){
+  var code = parseInt(String(err && err.message || '').replace(/\D+/g, ''), 10) || 0;
+  if(code === 402 || code === 403 || code === 410) DEAD_HOST[hostOf(u)] = 1;
+  DEAD_URL[u] = 1;
+}
+function usable(u){
+  return !noCors(u) && !DEAD_URL[u] && !DEAD_HOST[hostOf(u)];
+}
+
 async function saveZip(url, name, btn, alt){
   var old = btn.textContent;
   var sources = [url];
@@ -1261,9 +1294,9 @@ async function saveZip(url, name, btn, alt){
   try{
     var blob = null, lastErr = null;
     for(var i = 0; i < sources.length && !blob; i++){
-      if(noCors(sources[i])) continue;
+      if(!usable(sources[i])) continue;
       try{ blob = await pullZip(sources[i], btn); }
-      catch(e){ lastErr = e; btn.textContent = '0%'; }
+      catch(e){ lastErr = e; markDead(sources[i], e); btn.textContent = '0%'; }
     }
     if(!blob) throw (lastErr || new Error('no source'));
     var obj = URL.createObjectURL(blob);
@@ -1337,6 +1370,14 @@ document.addEventListener('click', function(e){
   }else say('fetching catalog…', true);
   refresh();
 })();
+</script>
+<script>
+// file:// cannot register a worker; the app is fully functional there anyway.
+if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
+  window.addEventListener('load', function(){
+    navigator.serviceWorker.register('sw.js', {scope:'./'}).catch(function(){});
+  });
+}
 </script>
 </body>
 </html>
