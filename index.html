@@ -308,10 +308,17 @@ async function loadHeroIcons(){
     if(r.ok) HERO_ICONS = await r.json();
   }catch(e){}
 }
-// the dated skin list that decides what the game actually has
-function loadReleased(){
+// the dated skin list that decides what the game actually has.
+// Lives in the repo so the hold-back list updates without a new build.
+var RELEASED_URL = 'https://raw.githubusercontent.com/PinkWards/skinvault/main/released.json';
+async function loadReleased(){
   if(NOT_YET.length) return;
-  var data = baked('released');
+  var data = null;
+  try{
+    var r = await fetch(RELEASED_URL + '?t=' + Date.now(), {cache:'no-store'});
+    if(r.ok) data = await r.json();
+  }catch(e){}
+  if(!data) data = baked('released');
   if(!data) return;
   (data.hidden||[]).forEach(function(p){ NOT_YET.push(idKey(p[0]) + '/' + idKey(p[1])); });
 }
@@ -333,7 +340,7 @@ function saveCache(items){
 
 async function refresh(){
   await loadHeroIcons();
-  loadReleased();
+  await loadReleased();
   say('fetching catalog…', true);
   var items = null, note = '';
   try{
@@ -512,7 +519,7 @@ document.addEventListener('click', function(e){
 
 (async function(){
   await loadHeroIcons();
-  loadReleased();
+  await loadReleased();
   if(loadCache()){
     renderHeroes(); render();
     say('cached catalog — checking for updates…', true);
