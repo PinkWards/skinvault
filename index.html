@@ -339,15 +339,29 @@ async function loadHeroIcons(){
 // Lives in the repo so the hold-back list updates without a new build.
 var RELEASED_URL = 'https://raw.githubusercontent.com/PinkWards/skinvault/main/released.json';
 async function loadReleased(){
-  if(NOT_YET.length) return;
-  var data = null;
+  // The repo copy is the live one; the copy baked into the page is the offline
+  // fallback. Union them, never replace: a repo file that lags behind the build
+  // must not un-hide a skin the build already knows about, and a newer repo file
+  // must not need a rebuild to take effect.
+  var lists = [];
+  var b = baked('released');
+  if(b && b.hidden) lists.push(b.hidden);
   try{
     var r = await fetch(RELEASED_URL + '?t=' + Date.now(), {cache:'no-store'});
-    if(r.ok) data = await r.json();
+    if(r.ok){
+      var d = await r.json();
+      if(d && d.hidden) lists.push(d.hidden);
+    }
   }catch(e){}
-  if(!data) data = baked('released');
-  if(!data) return;
-  (data.hidden||[]).forEach(function(p){ NOT_YET.push(idKey(p[0]) + '/' + idKey(p[1])); });
+  var seen = Object.create(null);
+  lists.forEach(function(list){
+    list.forEach(function(p){
+      var k = idKey(p[0]) + '/' + idKey(p[1]);
+      if(seen[k]) return;
+      seen[k] = 1;
+      NOT_YET.push(k);
+    });
+  });
 }
 
 function loadCache(){
