@@ -133,7 +133,7 @@ var MANIFEST = 'https://cdn.jsdelivr.net/gh/injctr/updates@main/kio.json';
 // heroes, most of them on raw.githubusercontent (CORS-friendly). It fills the
 // gaps injctr leaves — a hero whose only target was Collector gets the rest.
 var MOLESKIN = 'https://cdn.jsdelivr.net/gh/MyMasWayVPN/moleskin@main/combined_manifest.json';
-var CACHE_KEY = 'skinvault.index.v17';     // v17 = faces are skin-identity checked, files named from the card
+var CACHE_KEY = 'skinvault.index.v18';     // v18 = mirror fallback, short-read guard, card-named files
 var HERO_ICONS = {};                       // default hero icons, loaded from heroes.json
 var HERO_ALIAS = { 'Lou Yi': 'Luo Yi' };   // manifest spelling -> wiki page spelling
 
@@ -1122,7 +1122,7 @@ function render(){
         (g.inGame?'':'<span class="tag warn">not in game</span>')+
       '</div>'+
       '<div class="acts">'+
-        '<button class="dl" data-d="'+esc(it.url)+'" data-n="'+esc(fn)+'">download</button>'+
+        '<button class="dl" data-d="'+esc(it.url)+'" data-n="'+esc(fn)+'" data-m="'+esc(it.mirror || '')+'">download</button>'+
         '<button class="cp" data-u="'+esc(it.url)+'">copy link</button>'+
       '</div>'+
     '</div>';
@@ -1164,6 +1164,7 @@ $('list').addEventListener('change', function(e){
   var dl = card.querySelector('.dl');
   dl.dataset.d = it.url;
   dl.dataset.n = fn;
+  dl.dataset.m = it.mirror || '';
   card.querySelector('.cp').dataset.u = it.url;
 });
 
@@ -1176,7 +1177,7 @@ $('list').addEventListener('click', function(e){
   }
   var more=e.target.closest('#more'); if(more){ state.shown+=100; render(); return; }
   var d=e.target.closest('.dl');
-  if(d){ saveZip(d.dataset.d, d.dataset.n, d); return; }
+  if(d){ saveZip(d.dataset.d, d.dataset.n, d, d.dataset.m); return; }
   var b=e.target.closest('.cp'); if(!b) return;
   copyText(b.dataset.u);
 });
@@ -1221,33 +1222,50 @@ function handOff(url, name, btn, old){
   toast('sent to downloads — ' + (name || 'skin.zip'));
 }
 
+// One URL in, one blob out, with the percent painted on the button. Throws on
+// anything that is not a complete read, so the caller can try the next source.
+async function pullZip(url, btn){
+  var r = await fetch(rawUrl(url), {mode:'cors', cache:'no-store'});
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  var total = parseInt(r.headers.get('content-length') || '0', 10) || 0;
+  if(r.body && r.body.getReader){
+    var reader = r.body.getReader(), chunks = [], got = 0;
+    for(;;){
+      var step = await reader.read();
+      if(step.done) break;
+      chunks.push(step.value);
+      got += step.value.length;
+      btn.textContent = total
+        ? Math.max(1, Math.round(got * 100 / total)) + '%'
+        : (got / 1048576).toFixed(1) + ' MB';
+    }
+    // a truncated body is a dead link wearing a 200
+    if(total && got !== total) throw new Error('short read ' + got + '/' + total);
+    if(!got) throw new Error('empty body');
+    return new Blob(chunks, {type:'application/zip'});
+  }
+  var blob = await r.blob();
+  if(!blob.size) throw new Error('empty body');
+  return blob;
+}
+
 // Pull the zip through fetch and hand the phone a blob, so nothing leaves the app:
-// an <a href> download opens a tab and lands on github.raw instead.
-async function saveZip(url, name, btn){
+// an <a href> download opens a tab and lands on github.raw instead. A card with
+// a second published pack tries it before giving up.
+async function saveZip(url, name, btn, alt){
   var old = btn.textContent;
-  if(noCors(url)){ handOff(url, name, btn, old); return; }
+  var sources = [url];
+  if(alt && alt !== url) sources.push(alt);
   btn.disabled = true;
   btn.textContent = '0%';
   try{
-    var r = await fetch(rawUrl(url), {mode:'cors', cache:'no-store'});
-    if(!r.ok) throw new Error('HTTP ' + r.status);
-    var total = parseInt(r.headers.get('content-length') || '0', 10) || 0;
-    var blob;
-    if(r.body && r.body.getReader){
-      var reader = r.body.getReader(), chunks = [], got = 0;
-      for(;;){
-        var step = await reader.read();
-        if(step.done) break;
-        chunks.push(step.value);
-        got += step.value.length;
-        btn.textContent = total
-          ? Math.max(1, Math.round(got * 100 / total)) + '%'
-          : (got / 1048576).toFixed(1) + ' MB';
-      }
-      blob = new Blob(chunks, {type:'application/zip'});
-    }else{
-      blob = await r.blob();
+    var blob = null, lastErr = null;
+    for(var i = 0; i < sources.length && !blob; i++){
+      if(noCors(sources[i])) continue;
+      try{ blob = await pullZip(sources[i], btn); }
+      catch(e){ lastErr = e; btn.textContent = '0%'; }
     }
+    if(!blob) throw (lastErr || new Error('no source'));
     var obj = URL.createObjectURL(blob);
     var a = document.createElement('a');
     a.href = obj;
@@ -1261,7 +1279,7 @@ async function saveZip(url, name, btn){
     setTimeout(function(){ btn.textContent = old; btn.disabled = false; }, 4000);
   }catch(err){
     // last resort: hand the URL to the browser's downloader without leaving the page
-    handOff(url, name, btn, old);
+    handOff(sources[sources.length - 1], name, btn, old);
   }
 }
 
