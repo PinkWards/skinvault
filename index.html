@@ -70,7 +70,9 @@
     font-size:10px;border-radius:8px}
   .acts{display:flex;flex-direction:column;gap:5px;flex:0 0 auto}
   .dl{background:var(--acc);color:#04222a;border:0;border-radius:10px;
-    padding:8px 11px;font-size:12px;font-weight:800;text-decoration:none;text-align:center}
+    padding:8px 11px;font-size:12px;font-weight:800;text-decoration:none;text-align:center;
+    font-family:inherit;cursor:pointer;min-width:86px}
+  .dl[disabled]{opacity:.75;cursor:progress}
   .cp{background:transparent;color:var(--dim);border:1px solid var(--line);
     border-radius:10px;padding:5px 11px;font-size:11px}
   .more{display:block;width:100%;margin:6px 0 20px;background:var(--panel);
@@ -430,7 +432,7 @@ function render(){
         (it.inGame?'':'<span class="tag warn">not in game</span>')+
       '</div>'+
       '<div class="acts">'+
-        '<a class="dl" href="'+esc(it.url)+'" download="'+esc(fn)+'">download</a>'+
+        '<button class="dl" data-d="'+esc(it.url)+'" data-n="'+esc(fn)+'">download</button>'+
         '<button class="cp" data-u="'+esc(it.url)+'">copy link</button>'+
       '</div>'+
     '</div>';
@@ -461,16 +463,66 @@ $('list').addEventListener('click', function(e){
   if(e.target.id==='unv'){
     state.unverified = !state.unverified; state.shown=60; render(); return;
   }
-  if(e.target.id==='more'){ state.shown+=100; render(); return; }
+  var more=e.target.closest('#more'); if(more){ state.shown+=100; render(); return; }
+  var d=e.target.closest('.dl');
+  if(d){ saveZip(d.dataset.d, d.dataset.n, d); return; }
   var b=e.target.closest('.cp'); if(!b) return;
-  var u=b.dataset.u;
+  copyText(b.dataset.u);
+});
+
+function copyText(u){
   if(navigator.clipboard && navigator.clipboard.writeText){
     navigator.clipboard.writeText(u).then(function(){toast('link copied');});
   }else{
     var ta=document.createElement('textarea'); ta.value=u; document.body.appendChild(ta);
     ta.select(); document.execCommand('copy'); ta.remove(); toast('link copied');
   }
-});
+}
+
+// Pull the zip through fetch and hand the phone a blob, so nothing leaves the app:
+// an <a href> download opens a tab and lands on github.raw instead.
+async function saveZip(url, name, btn){
+  var old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '0%';
+  try{
+    var r = await fetch(url, {mode:'cors'});
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    var total = parseInt(r.headers.get('content-length') || '0', 10) || 0;
+    var blob;
+    if(r.body && r.body.getReader){
+      var reader = r.body.getReader(), chunks = [], got = 0;
+      for(;;){
+        var step = await reader.read();
+        if(step.done) break;
+        chunks.push(step.value);
+        got += step.value.length;
+        btn.textContent = total
+          ? Math.max(1, Math.round(got * 100 / total)) + '%'
+          : (got / 1048576).toFixed(1) + ' MB';
+      }
+      blob = new Blob(chunks, {type:'application/zip'});
+    }else{
+      blob = await r.blob();
+    }
+    var obj = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = obj;
+    a.download = name || 'skin.zip';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(obj); }, 60000);
+    btn.textContent = 'saved';
+    toast('saved ' + (name || 'skin.zip'));
+    setTimeout(function(){ btn.textContent = old; btn.disabled = false; }, 4000);
+  }catch(err){
+    btn.textContent = old;
+    btn.disabled = false;
+    toast('could not fetch — link copied');
+    copyText(url);
+  }
+}
 
 // horizontal hero strip: mouse wheel + drag on desktop, native swipe on touch
 var strip = $('heroes');
