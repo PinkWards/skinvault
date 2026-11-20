@@ -133,7 +133,7 @@ var MANIFEST = 'https://cdn.jsdelivr.net/gh/injctr/updates@main/kio.json';
 // heroes, most of them on raw.githubusercontent (CORS-friendly). It fills the
 // gaps injctr leaves — a hero whose only target was Collector gets the rest.
 var MOLESKIN = 'https://cdn.jsdelivr.net/gh/MyMasWayVPN/moleskin@main/combined_manifest.json';
-var CACHE_KEY = 'skinvault.index.v16';     // v16 = base label follows the face, tier names resolved
+var CACHE_KEY = 'skinvault.index.v17';     // v17 = faces are skin-identity checked, files named from the card
 var HERO_ICONS = {};                       // default hero icons, loaded from heroes.json
 var HERO_ALIAS = { 'Lou Yi': 'Luo Yi' };   // manifest spelling -> wiki page spelling
 
@@ -183,6 +183,16 @@ function isInGame(hero, skin){
   if(NOT_YET.indexOf(idKey(hero) + '/' + idKey(skin)) !== -1) return false;
   var y = String(skin||'').match(/\b(20\d{2})\b/);
   return !(y && +y[1] > 2026);             // a future year in the name is not out yet
+}
+// The pack's own filename is often a typo ("Khufta Collector - Elite") or a
+// folder key. The card already knows what the swap is, so the file is named
+// from that: Khufra - Gentleman Thief (over Default).zip
+function zipName(hero, skin, base){
+  var over = base && !/^default$/i.test(base) ? ' (over ' + base + ')' : '';
+  return (hero + ' - ' + skin + over + '.zip')
+    .replace(/[\\/:*?"<>|]+/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 function fileName(u){
   try { return decodeURIComponent(new URL(u).pathname.split('/').pop()) || 'skin.zip'; }
@@ -269,8 +279,7 @@ function buildIndex(root){
           // the base is a skin too, and the manifest's own img1 names it when
           // the label is an injector tier ("Elite 1") rather than a name
           var baseName = resolveBase(hero, rawBase, base.img1, url);
-          var fromImg = basePic(hero, baseName) ||
-                        (isFace(base.img1) ? base.img1 : '') || heroArt(hero);
+          var fromImg = faceFor(hero, baseName, base.img1);
           // a base that shows the default face is the default base, whatever
           // tier the packer filed it under
           if(fromImg === heroArt(hero)) baseName = 'Default';
@@ -294,9 +303,10 @@ function buildIndex(root){
           // a pack that installs X over X is not a swap. The source has one —
           // Chou's Libra Shiryu folder lists its own base — so drop that row.
           if(normName(baseName) === normName(skinName)) return;
-          // one face, one side: if the pack replaces the skin it installs there
-          // is nothing to draw
+          // one face, one side: same picture, or two pictures of the same skin,
+          // is not a swap and never becomes a card
           if(fromImg === toImg) return;
+          if(faceId(hero, fromImg) && faceId(hero, fromImg) === faceId(hero, toImg)) return;
           push({
             hero: hero,
             skin: skinName,
@@ -386,11 +396,12 @@ function buildMoleskin(root){
       if(normName(skin) === normName(base)) return;
       var toImg = skinPic(hero, skin);
       if(!toImg || toImg === heroArt(hero)) return;
-      var fromImg = basePic(hero, base) || (isFace(s.img) ? s.img : '') || heroArt(hero);
+      var fromImg = faceFor(hero, base, s.img);
       if(fromImg === heroArt(hero)) base = 'Default';
       // moleskin sometimes hands back the same portrait for both sides; a card
       // that prints one face twice is worse than no card
       if(fromImg === toImg) return;
+      if(faceId(hero, fromImg) && faceId(hero, fromImg) === faceId(hero, toImg)) return;
       out.push({
         hero: hero,
         skin: skin,
@@ -763,8 +774,25 @@ function baseLabel(s){
   return BASE_LABEL[idKey(t)] || t;
 }
 function basePic(hero, base){
+  if(/^default$/i.test(base)) return portraitUrl(HERO_DEFAULT[idKey(hero)]) || '';
   return skinPic(hero, base) ||
          (/^basic$/i.test(base) ? portraitUrl(BASIC_ART[idKey(hero)]) : '') || '';
+}
+// The face for a named skin: its own artwork, or the hero default. A pack's
+// img1/img2 is only evidence when the skin id inside it resolves to that same
+// name — otherwise it is a picture of something else wearing a face costume,
+// which is how Gentleman Thief ended up printed on both sides of its own card.
+function faceFor(hero, name, hint){
+  var own = basePic(hero, name);
+  if(own) return own;
+  var byId = skinFromArt(hero, hint);
+  if(byId && idKey(byId) === idKey(name)) return String(hint);
+  return heroArt(hero);
+}
+// the dex id behind a face, so two URLs showing one skin compare equal
+function faceId(hero, url){
+  var n = skinFromArt(hero, url);
+  return n ? idKey(n) : '';
 }
 function assetUrl(p){
   if(!p) return '';
@@ -842,12 +870,13 @@ async function refresh(){
     var local = baked('manifest');
     if(local){ items = buildIndex(local); note = ' (offline manifest)'; }
   }
+  var molCount = 0;
   if(items){
     markReal(items);
     if(both[1].status === 'fulfilled'){
-      var before = items.length;
       items = mergeIndex(items, buildMoleskin(both[1].value));
-      if(items.length > before) note += ' +' + (items.length - before) + ' from moleskin';
+      molCount = items.filter(function(x){ return x.src === 'moleskin'; }).length;
+      if(molCount) note += ' · ' + molCount + ' from moleskin';
     }else{
       note += ' (moleskin offline)';
     }
@@ -1074,7 +1103,7 @@ function render(){
 
   var html = slice.map(function(g, i){
     var it = g.bases[0];
-    var fn = fileName(it.url);
+    var fn = zipName(g.hero, g.skin, it.base);
     var fb = g.heroImg || tile;
     var opts = g.bases.map(function(b, bi){
       return '<option value="'+bi+'"'+(bi===0?' selected':'')+'>'+esc(b.base)+'</option>';
@@ -1122,7 +1151,7 @@ $('list').addEventListener('change', function(e){
   var card = s.closest('.card'); if(!card) return;
   var g = state.groups[+card.dataset.i]; if(!g) return;
   var it = g.bases[+s.value]; if(!it) return;
-  var fn = fileName(it.url);
+  var fn = zipName(g.hero, g.skin, it.base);
   var img = card.querySelector('.fi');
   if(img){
     img.src = bust(it.fromImg || g.heroImg);
