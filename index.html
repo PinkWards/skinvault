@@ -127,7 +127,11 @@
 <script>
 /* PURE START — parser, no DOM. Tested against the live kio.json. */
 var MANIFEST = 'https://cdn.jsdelivr.net/gh/injctr/updates@main/kio.json';
-var CACHE_KEY = 'skinvault.index.v6';      // v6 = one card per skin, table names win
+// Second shelf: moleskin lists thousands of "install X over Y" packs across 131
+// heroes, most of them on raw.githubusercontent (CORS-friendly). It fills the
+// gaps injctr leaves — a hero whose only target was Collector gets the rest.
+var MOLESKIN = 'https://cdn.jsdelivr.net/gh/MyMasWayVPN/moleskin@main/combined_manifest.json';
+var CACHE_KEY = 'skinvault.index.v7';      // v7 = injctr + moleskin merged
 var HERO_ICONS = {};                       // default hero icons, loaded from heroes.json
 var HERO_ALIAS = { 'Lou Yi': 'Luo Yi' };   // manifest spelling -> wiki page spelling
 
@@ -278,6 +282,124 @@ function buildIndex(root){
   return out;
 }
 
+// --- second shelf: moleskin ------------------------------------------------
+// Labels there are lowercase and loose ("star", "collector", "default skin").
+// Map the few that would otherwise sit next to an injctr card under a
+// different name, and title-case the rest.
+var MOL_ALIAS = {
+  'star': 'Starlight', 'star 2': 'Starlight 2', 'star2': 'Starlight 2',
+  'annual star': 'Annual Starlight', 'default skin': 'Default',
+  'msc': 'MSC', 'kof': 'KOF', 'jjk': 'JJK', 'aot': 'AOT',
+  'm1': 'M1', 'm2': 'M2', 'm3': 'M3', 'msc 2033': 'MSC 2023'
+};
+function molName(s){
+  var t = titleName(s);
+  return MOL_ALIAS[t.toLowerCase()] || t;
+}
+
+// moleskin spells a dozen heroes its own way. Point them at the canonical name
+// so one hero's packs land on one card instead of splitting in two.
+var MOL_HERO_ALIAS = {
+  'Balerick': 'Belerick', 'Chang e': "Chang'e", 'Fredrin': 'Fredrinn',
+  'Lilya': 'Lylia', 'Minsittar': 'Minsitthar', 'Odete': 'Odette',
+  'Parsha': 'Pharsa', 'Popol & Kupa': 'Popol and Kupa', 'Silvana': 'Silvanna',
+  'Thamus': 'Thamuz', 'X-Borg': 'X.Borg', 'Yi Shun Shin': 'Yi Sun-shin',
+  'Luo Yi': 'Lou Yi'
+};
+
+function buildMoleskin(root){
+  var out = [];
+  var seen = Object.create(null);
+  var data = root || {};
+  Object.keys(data).forEach(function(rawHero){
+    var hero = MOL_HERO_ALIAS[rawHero] || rawHero;
+    var hv = data[rawHero] || {};
+    var rows = hv.skins || [];
+
+    // The "Default Skin" row carries the real default hero portrait, which is
+    // also the only icon moleskin has for heroes missing from heroes.json.
+    var heroImg = '';
+    rows.forEach(function(s){
+      if(heroImg) return;
+      if(/default/i.test(s.skin_name || '')) heroImg = s.img || s.img2 || '';
+    });
+    if(!heroImg) heroImg = HERO_ICONS[hero] || HERO_ICONS[HERO_ALIAS[hero]] || '';
+
+    rows.forEach(function(s){
+      var url = s.download;
+      if(!isZip(url) || seen[url]) return;
+      seen[url] = 1;
+      // category "Upgrade" rows are explicit swaps: skin_name is the base,
+      // skin_name2 is the skin going in. "Default" rows install over Default.
+      var isUp = String(s.category || '') === 'Upgrade' && String(s.skin_name2 || '').trim();
+      var skin = molName(isUp ? s.skin_name2 : s.skin_name);
+      var base = isUp ? molName(s.skin_name) : 'Default';
+      if(!skin) return;
+      // a pack that installs X over X is not a swap
+      if(normName(skin) === normName(base)) return;
+      var toImg = s.img2 || s.img || heroImg;
+      var fromImg = (isUp ? s.img : heroImg) || heroImg;
+      // moleskin sometimes hands back the same portrait for both sides; the
+      // default hero icon is the honest "from" when that happens.
+      if(fromImg === toImg && heroImg && heroImg !== toImg) fromImg = heroImg;
+      out.push({
+        hero: hero,
+        skin: skin,
+        base: base,
+        url: url,
+        fromImg: fromImg,
+        toImg: toImg,
+        inGame: isInGame(hero, skin),
+        heroImg: heroImg,
+        group: 'Skin',
+        mirror: '',
+        src: 'moleskin'
+      });
+    });
+  });
+  return out;
+}
+
+// Both shelves sell the same swap for the same hero+skin+base. injctr wins the
+// tie: cleaner names, and its links live on raw.githubusercontent, which the
+// in-app download can fetch without a CORS fight. Its base labels also win —
+// moleskin's "Starlight" is the same slot injctr calls "Starlight 2021".
+function mergeIndex(primary, extra){
+  var out = primary.slice();
+  var seen = Object.create(null);
+  var bases = Object.create(null);          // heroKey -> [label, ...]
+  function mark(it){
+    seen[idKey(it.hero) + '|' + normName(it.skin) + '|' + normName(it.base)] = 1;
+    seen['u|' + it.url] = 1;
+  }
+  primary.forEach(function(it){
+    mark(it);
+    (bases[idKey(it.hero)] = bases[idKey(it.hero)] || []).push(it.base);
+  });
+  function canonBase(hero, base){
+    var list = bases[idKey(hero)];
+    if(!list) return base;
+    var nb = normName(base), hits = [];
+    for(var i = 0; i < list.length; i++){
+      var nl = normName(list[i]);
+      if(nl === nb) return list[i];
+      // "Starlight" vs "Starlight 2021": accept only an unambiguous prefix
+      if(nl.indexOf(nb) === 0 || nb.indexOf(nl) === 0) hits.push(list[i]);
+    }
+    var uniq = hits.filter(function(v, i, a){ return a.indexOf(v) === i; });
+    return uniq.length === 1 ? uniq[0] : base;
+  }
+  (extra || []).forEach(function(it){
+    var base = canonBase(it.hero, it.base);
+    var k = idKey(it.hero) + '|' + normName(it.skin) + '|' + normName(base);
+    if(seen[k] || seen['u|' + it.url]) return;
+    if(base !== it.base) it = Object.assign({}, it, { base: base });
+    mark(it);
+    out.push(it);
+  });
+  return out;
+}
+
 function filterItems(items, q, hero){
   q = (q||'').toLowerCase().trim();
   var terms = q ? q.split(/\s+/) : [];
@@ -376,7 +498,13 @@ function loadCache(){
 }
 function saveCache(items){
   try{ localStorage.setItem(CACHE_KEY, JSON.stringify({ts:Date.now(),items:items})); }
-  catch(e){ toast('storage full'); }
+  catch(e){ /* over quota — the catalog still loads, it just starts cold next time */ }
+}
+
+async function fetchJson(u){
+  var r = await fetch(u, {cache:'no-store'});
+  if(!r.ok) throw new Error('HTTP ' + r.status);
+  return r.json();
 }
 
 async function refresh(){
@@ -384,18 +512,27 @@ async function refresh(){
   await loadReleased();
   say('fetching catalog…', true);
   var items = null, note = '';
+
+  // Both shelves in one go; moleskin is optional, injctr is not.
+  var both = await Promise.allSettled([
+    fetchJson(MANIFEST + '?t=' + Date.now()),
+    fetchJson(MOLESKIN + '?t=' + Date.now())
+  ]);
+
   try{
-    var r = await fetch(MANIFEST + '?t=' + Date.now(), {cache:'no-store'});
-    if(!r.ok) throw new Error('HTTP '+r.status);
-    items = buildIndex(await r.json());
+    if(both[0].status !== 'fulfilled') throw new Error('primary down');
+    items = buildIndex(both[0].value);
   }catch(e){
     var local = baked('manifest');
     if(local){ items = buildIndex(local); note = ' (offline manifest)'; }
-    if(!items){
-      try{
-        var lr = await fetch('./kio.json', {cache:'no-store'});
-        if(lr.ok){ items = buildIndex(await lr.json()); note = ' (local manifest)'; }
-      }catch(e2){}
+  }
+  if(items){
+    if(both[1].status === 'fulfilled'){
+      var before = items.length;
+      items = mergeIndex(items, buildMoleskin(both[1].value));
+      if(items.length > before) note += ' +' + (items.length - before) + ' from moleskin';
+    }else{
+      note += ' (moleskin offline)';
     }
   }
 
@@ -577,14 +714,39 @@ function copyText(u){
 // github.com/OWNER/REPO/raw/BRANCH/PATH 302s to raw.githubusercontent.com,
 // and that hop carries no CORS headers, so the fetch dies. Ask the raw host directly.
 function rawUrl(u){
-  var m = String(u || '').match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/raw\/(.+)$/);
-  return m ? 'https://raw.githubusercontent.com/' + m[1] + '/' + m[2] + '/' + m[3] : u;
+  var s = String(u || '');
+  var m = s.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/raw\/(.+)$/);
+  if(m) return 'https://raw.githubusercontent.com/' + m[1] + '/' + m[2] + '/' + m[3];
+  // dropbox share links do the same trick: the www host has no CORS, the
+  // content host does.
+  var d = s.match(/^https?:\/\/(?:www\.)?dropbox\.com\/s\/([^?]+)/);
+  if(d) return 'https://dl.dropboxusercontent.com/s/' + d[1] + '?dl=1';
+  return s;
+}
+
+// GitHub release assets redirect to a host that sends no CORS headers at all,
+// so a fetch can never read the bytes. Those go straight to the browser's own
+// downloader through a hidden frame — it still never leaves the page.
+function noCors(u){
+  return /^https?:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\//.test(String(u || ''));
+}
+
+function handOff(url, name, btn, old){
+  var f = document.createElement('iframe');
+  f.style.display = 'none';
+  f.src = url;
+  document.body.appendChild(f);
+  setTimeout(function(){ f.remove(); }, 60000);
+  btn.textContent = old;
+  btn.disabled = false;
+  toast('sent to downloads — ' + (name || 'skin.zip'));
 }
 
 // Pull the zip through fetch and hand the phone a blob, so nothing leaves the app:
 // an <a href> download opens a tab and lands on github.raw instead.
 async function saveZip(url, name, btn){
   var old = btn.textContent;
+  if(noCors(url)){ handOff(url, name, btn, old); return; }
   btn.disabled = true;
   btn.textContent = '0%';
   try{
@@ -619,15 +781,8 @@ async function saveZip(url, name, btn){
     toast('saved ' + (name || 'skin.zip'));
     setTimeout(function(){ btn.textContent = old; btn.disabled = false; }, 4000);
   }catch(err){
-    btn.textContent = old;
-    btn.disabled = false;
     // last resort: hand the URL to the browser's downloader without leaving the page
-    var f = document.createElement('iframe');
-    f.style.display = 'none';
-    f.src = url;
-    document.body.appendChild(f);
-    setTimeout(function(){ f.remove(); }, 60000);
-    toast('handed it to the browser — check downloads');
+    handOff(url, name, btn, old);
   }
 }
 
