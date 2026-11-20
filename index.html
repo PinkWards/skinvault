@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0a1626">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>SkinVault — download only</title>
+<style>
+  :root{
+    --bg:#0a1626; --panel:#12233a; --panel2:#172b45; --line:#253c58;
+    --text:#e8f1ff; --dim:#8ba6c4; --acc:#00d3b8; --acc2:#1ecbe1; --warn:#ffb454;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  body{padding-bottom:90px}
+  header{position:sticky;top:0;z-index:20;background:rgba(10,22,38,.96);
+    backdrop-filter:blur(12px);border-bottom:1px solid var(--line);
+    padding:calc(env(safe-area-inset-top) + 12px) 14px 10px}
+  .top{display:flex;align-items:center;gap:10px}
+  h1{font-size:18px;margin:0;letter-spacing:.3px;flex:1}
+  h1 span{color:var(--acc)}
+  .badge{font-size:10px;color:var(--dim);border:1px solid var(--line);
+    border-radius:20px;padding:3px 8px}
+  button{font:inherit;cursor:pointer}
+  .icon-btn{background:var(--panel);color:var(--text);border:1px solid var(--line);
+    border-radius:10px;padding:7px 10px;font-size:13px}
+  .icon-btn:active{transform:scale(.96)}
+  .searchrow{display:flex;gap:8px;margin-top:10px}
+  #q{flex:1;min-width:0;background:var(--panel);border:1px solid var(--line);
+    color:var(--text);border-radius:12px;padding:11px 13px;font-size:15px;outline:none}
+  #q:focus{border-color:var(--acc)}
+  .tabs{display:flex;gap:6px;overflow-x:auto;margin-top:10px;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tab{white-space:nowrap;background:transparent;color:var(--dim);border:1px solid var(--line);
+    border-radius:20px;padding:6px 13px;font-size:12px}
+  .tab.on{background:var(--acc);color:#04222a;border-color:var(--acc);font-weight:700}
+  .heroes{display:flex;gap:8px;overflow-x:auto;padding:12px 14px 4px;scrollbar-width:none}
+  .heroes::-webkit-scrollbar{display:none}
+  .hero{width:58px;flex:0 0 58px;text-align:center;background:none;border:0;color:var(--dim);
+    font-size:10px;padding:0}
+  .hero img{width:50px;height:50px;border-radius:12px;object-fit:cover;
+    background:var(--panel2);border:2px solid transparent;display:block;margin:0 auto 3px}
+  .hero.on img{border-color:var(--acc)}
+  .hero.on{color:var(--acc)}
+  .meta{padding:6px 14px 10px;color:var(--dim);font-size:12px;display:flex;
+    justify-content:space-between;gap:8px}
+  #list{padding:0 12px}
+  .card{display:flex;gap:11px;align-items:center;background:var(--panel);
+    border:1px solid var(--line);border-radius:14px;padding:10px;margin-bottom:9px}
+  .card img{width:52px;height:52px;border-radius:10px;object-fit:cover;
+    background:var(--panel2);flex:0 0 52px}
+  .info{flex:1;min-width:0}
+  .t1{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .t2{font-size:11px;color:var(--dim);margin-top:3px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .tag{display:inline-block;font-size:9px;color:var(--acc2);border:1px solid #24566b;
+    border-radius:6px;padding:1px 5px;margin-top:4px}
+  .acts{display:flex;flex-direction:column;gap:5px;flex:0 0 auto}
+  .dl{background:var(--acc);color:#04222a;border:0;border-radius:10px;
+    padding:8px 11px;font-size:12px;font-weight:800;text-decoration:none;text-align:center}
+  .cp{background:transparent;color:var(--dim);border:1px solid var(--line);
+    border-radius:10px;padding:5px 11px;font-size:11px}
+  .more{display:block;width:100%;margin:6px 0 20px;background:var(--panel);
+    color:var(--acc);border:1px dashed var(--line);border-radius:12px;padding:12px}
+  .empty{text-align:center;color:var(--dim);padding:50px 20px;font-size:14px;line-height:1.6}
+  #status{position:fixed;left:0;right:0;bottom:0;z-index:30;background:#0d2135;
+    border-top:1px solid var(--line);padding:10px 14px calc(env(safe-area-inset-bottom) + 10px);
+    font-size:12px;color:var(--dim);display:flex;gap:10px;align-items:center}
+  #status b{color:var(--text)}
+  .spin{width:14px;height:14px;border:2px solid var(--line);border-top-color:var(--acc);
+    border-radius:50%;display:none}
+  .spin.on{display:block;animation:r .7s linear infinite}
+  @keyframes r{to{transform:rotate(360deg)}}
+  .toast{position:fixed;left:50%;bottom:80px;transform:translateX(-50%);z-index:50;
+    background:var(--acc);color:#04222a;padding:9px 16px;border-radius:20px;
+    font-size:12px;font-weight:700;opacity:0;pointer-events:none;transition:.25s}
+  .toast.on{opacity:1}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="top">
+    <h1>skin<span>vault</span> <span class="badge">download only</span></h1>
+    <button class="icon-btn" id="refresh">refresh</button>
+  </div>
+  <div class="searchrow">
+    <input id="q" placeholder="search hero or skin — lukas, sasuke, gojo…" autocomplete="off" spellcheck="false">
+    <button class="icon-btn" id="clear">clear</button>
+  </div>
+  <div class="tabs" id="tabs">
+    <button class="tab on" data-g="all">all</button>
+    <button class="tab" data-g="Skin">hero skins</button>
+    <button class="tab" data-g="Custom">anime skins</button>
+  </div>
+</header>
+
+<div class="heroes" id="heroes"></div>
+<div class="meta"><span id="count">loading…</span><span id="age"></span></div>
+<div id="list"></div>
+
+<div id="status">
+  <div class="spin" id="spin"></div>
+  <span id="msg">starting…</span>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+/* PURE START — parser, no DOM. Tested against the live kio.json. */
+var MANIFEST = 'https://cdn.jsdelivr.net/gh/injctr/updates@main/kio.json';
+var CACHE_KEY = 'skinvault.index.v1';
+
+function cleanNum(s){ return String(s||'').replace(/^\d+\s*/,'').trim(); }
+function isZip(s){ return typeof s === 'string' && /\.zip(?:\?.*)?$/i.test(s); }
+function firstVal(o){ if(!o) return ''; var k=Object.keys(o); return k.length?o[k[0]]:''; }
+function pickImg(o){
+  if(!o) return '';
+  return o.img2 || o.img1 || o.img || (o.name && o.name.indexOf('http')===0 ? o.name : '') || '';
+}
+function fileName(u){
+  try { return decodeURIComponent(new URL(u).pathname.split('/').pop()) || 'skin.zip'; }
+  catch(e){ return 'skin.zip'; }
+}
+function deriveSkin(key, hero, url){
+  // The manifest key is often the SOURCE folder, while the filename carries
+  // the actual skin ("Suyou Sasuke - Default.zip" under key "Naruto").
+  var fn = fileName(url).replace(/\.zip$/i,'');
+  var head = fn.split(' - ')[0];
+  var cand = head.replace(new RegExp('^'+hero.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'\\s*','i'),'').trim();
+  return cand || key;
+}
+
+function buildIndex(root){
+  var d = Array.isArray(root) ? (root[0]||{}) : (root||{});
+  var out = [];
+  var seen = Object.create(null);
+
+  function push(o){
+    if(!o.url || seen[o.url]) return;
+    seen[o.url] = 1;
+    out.push(o);
+  }
+
+  // Hero skin replacement packs
+  var heroes = d.Hero || {};
+  Object.keys(heroes).forEach(function(hero){
+    var h = heroes[hero] || {};
+    var reps = h.Replacements || {};
+    var heroImg = '';
+    Object.keys(reps).some(function(k){
+      heroImg = pickImg(reps[k]); return !!heroImg;
+    });
+    if(!heroImg){
+      var skins = h.Skins || {};
+      heroImg = pickImg(firstVal(skins));
+    }
+
+    Object.keys(reps).forEach(function(baseKey){
+      var base = reps[baseKey] || {};
+      var baseName = base.type1 || cleanNum(baseKey);
+      var groups = [['type_links',''], ['second_link','mirror']];
+      groups.forEach(function(g){
+        var tbl = base[g[0]] || {};
+        Object.keys(tbl).forEach(function(skinKey){
+          var url = tbl[skinKey];
+          if(!isZip(url)) return;
+          push({
+            hero: hero,
+            skin: deriveSkin(cleanNum(skinKey), hero, url),
+            base: baseName,
+            url: url,
+            img: pickImg(base) || heroImg,
+            heroImg: heroImg,
+            group: 'Skin',
+            mirror: g[1]
+          });
+        });
+      });
+    });
+  });
+
+  // Anime / custom crossovers
+  var custom = d['Custom-Skins'] || {};
+  Object.keys(custom).forEach(function(k){
+    var c = custom[k] || {};
+    if(isZip(c.url)) push({
+      hero: c.name || 'Custom',
+      skin: c['cs-name'] || cleanNum(k),
+      base: c.category || 'Custom',
+      url: c.url, img: pickImg(c), heroImg: pickImg(c),
+      group: 'Custom', mirror: ''
+    });
+  });
+
+  // Effects (recall / emote / trail / elimination / radiant kit) are excluded.
+  // Nothing below this line adds to the index.
+
+  return out;
+}
+
+function filterItems(items, q, group, hero){
+  q = (q||'').toLowerCase().trim();
+  var terms = q ? q.split(/\s+/) : [];
+  return items.filter(function(it){
+    if(group && group!=='all' && it.group!==group) return false;
+    if(hero && it.hero !== hero) return false;
+    if(!terms.length) return true;
+    var hay = (it.hero+' '+it.skin+' '+it.base+' '+fileName(it.url)).toLowerCase();
+    return terms.every(function(t){ return hay.indexOf(t) !== -1; });
+  });
+}
+/* PURE END */
+
+var state = { items:[], q:'', group:'all', hero:'', shown:60, age:0 };
+
+function $(id){ return document.getElementById(id); }
+function say(t, busy){
+  $('msg').textContent = t;
+  $('spin').className = busy ? 'spin on' : 'spin';
+}
+function toast(t){
+  var el=$('toast'); el.textContent=t; el.className='toast on';
+  clearTimeout(toast._t); toast._t=setTimeout(function(){ el.className='toast'; },1600);
+}
+
+function loadCache(){
+  try{
+    var c = JSON.parse(localStorage.getItem(CACHE_KEY)||'null');
+    if(c && c.items && c.items.length){
+      state.items=c.items; state.age=c.ts||0;
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+function saveCache(items){
+  try{ localStorage.setItem(CACHE_KEY, JSON.stringify({ts:Date.now(),items:items})); }
+  catch(e){ toast('storage full'); }
+}
+
+async function refresh(force){
+  say('fetching catalog…', true);
+  try{
+    var r = await fetch(MANIFEST + '?t=' + Date.now(), {cache:'no-store'});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    var data = await r.json();
+    var items = buildIndex(data);
+    if(items.length < 100) throw new Error('short manifest: '+items.length);
+    state.items = items;
+    state.age = Date.now();
+    saveCache(items);
+    renderHeroes();
+    render();
+    say(items.length+' packs ready', false);
+  }catch(e){
+    // Local copy of the manifest keeps the app alive with zero network.
+    try{
+      var lr = await fetch('./kio.json', {cache:'no-store'});
+      if(lr.ok){
+        var local = await lr.json();
+        var li = buildIndex(local);
+        if(li.length > 100){
+          state.items = li; state.age = Date.now();
+          renderHeroes(); render();
+          say(li.length+' packs ready (local manifest)', false);
+          return;
+        }
+      }
+    }catch(e2){}
+    say('offline — showing cached catalog ('+(state.items.length||0)+')', false);
+    if(!state.items.length) $('list').innerHTML =
+      '<div class="empty">no catalog yet.<br>connect to the internet and tap refresh.</div>';
+  }
+}
+
+function renderHeroes(){
+  var map = {};
+  state.items.forEach(function(it){ if(it.heroImg) map[it.hero]=it.heroImg; });
+  var names = Object.keys(map).sort();
+  var html = '<button class="hero'+(state.hero?'':' on')+'" data-h="">'+
+             '<img src="" alt="">all</button>';
+  names.forEach(function(n){
+    html += '<button class="hero'+(state.hero===n?' on':'')+'" data-h="'+esc(n)+'">'+
+            '<img loading="lazy" src="'+esc(map[n])+'" alt="">'+esc(n.slice(0,9))+'</button>';
+  });
+  $('heroes').innerHTML = html;
+}
+
+function esc(s){
+  return String(s||'').replace(/[&<>"']/g,function(c){
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+
+function render(){
+  var hits = filterItems(state.items, state.q, state.group, state.hero);
+  $('count').textContent = hits.length.toLocaleString()+' results';
+  $('age').textContent = state.age
+    ? 'updated '+Math.max(0,Math.round((Date.now()-state.age)/60000))+'m ago'
+    : '';
+
+  if(!hits.length){
+    $('list').innerHTML='<div class="empty">nothing matched.<br>try just a hero name.</div>';
+    return;
+  }
+  var slice = hits.slice(0, state.shown);
+  var html = slice.map(function(it){
+    var fn = fileName(it.url);
+    return '<div class="card">'+
+      (it.img?'<img loading="lazy" src="'+esc(it.img)+'" alt="">':'<img alt="">')+
+      '<div class="info">'+
+        '<div class="t1">'+esc(it.hero)+' — '+esc(it.skin)+'</div>'+
+        '<div class="t2">'+esc(fn)+'</div>'+
+        '<span class="tag">'+esc(it.base)+(it.mirror?' · mirror available':'')+'</span>'+
+      '</div>'+
+      '<div class="acts">'+
+        '<a class="dl" href="'+esc(it.url)+'" download="'+esc(fn)+'">download</a>'+
+        '<button class="cp" data-u="'+esc(it.url)+'">copy link</button>'+
+      '</div>'+
+    '</div>';
+  }).join('');
+  if(hits.length > state.shown)
+    html += '<button class="more" id="more">show more ('+(hits.length-state.shown)+' left)</button>';
+  $('list').innerHTML = html;
+}
+
+$('q').addEventListener('input', function(e){
+  state.q=e.target.value; state.shown=60; render();
+});
+$('clear').addEventListener('click', function(){
+  state.q=''; state.hero=''; state.group='all'; state.shown=60;
+  $('q').value='';
+  document.querySelectorAll('.tab').forEach(function(t){
+    t.className='tab'+(t.dataset.g==='all'?' on':'');
+  });
+  renderHeroes(); render();
+});
+$('tabs').addEventListener('click', function(e){
+  var b=e.target.closest('.tab'); if(!b) return;
+  state.group=b.dataset.g; state.shown=60;
+  document.querySelectorAll('.tab').forEach(function(t){ t.className='tab'; });
+  b.className='tab on';
+  render();
+});
+$('heroes').addEventListener('click', function(e){
+  var b=e.target.closest('.hero'); if(!b) return;
+  state.hero=b.dataset.h; state.shown=60;
+  renderHeroes(); render();
+});
+$('refresh').addEventListener('click', function(){ refresh(true); });
+$('list').addEventListener('click', function(e){
+  if(e.target.id==='more'){ state.shown+=100; render(); return; }
+  var b=e.target.closest('.cp'); if(!b) return;
+  var u=b.dataset.u;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(u).then(function(){toast('link copied');});
+  }else{
+    var ta=document.createElement('textarea'); ta.value=u; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); ta.remove(); toast('link copied');
+  }
+});
+
+if(loadCache()){ renderHeroes(); render(); say('cached catalog ready — checking for updates…',true); }
+else say('fetching catalog…', true);
+refresh(false);
+</script>
+</body>
+</html>
