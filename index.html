@@ -66,6 +66,9 @@
   .tag{display:inline-block;font-size:9px;color:var(--acc2);border:1px solid #24566b;
     border-radius:6px;padding:1px 5px;margin-top:4px}
   .tag.warn{color:#ff9f6e;border-color:#7a3a1d;margin-left:4px}
+  .bsel{display:block;width:100%;max-width:230px;margin:5px 0 0;padding:4px 6px;
+    background:var(--panel);color:var(--txt);border:1px solid var(--line);
+    border-radius:8px;font-size:11px;font-family:inherit}
   .meta .more{display:inline;width:auto;margin:0 0 0 8px;padding:2px 8px;
     font-size:10px;border-radius:8px}
   .acts{display:flex;flex-direction:column;gap:5px;flex:0 0 auto}
@@ -265,7 +268,7 @@ function filterItems(items, q, hero){
 }
 /* PURE END */
 
-var state = { items:[], q:'', hero:'', shown:60, age:0, unverified:false };
+var state = { items:[], q:'', hero:'', shown:60, age:0, unverified:false, groups:[] };
 
 function $(id){ return document.getElementById(id); }
 function say(t, busy){
@@ -385,51 +388,86 @@ function renderHeroes(){
   $('heroes').innerHTML = html;
 }
 
+// One card per skin. The manifest ships a pack per (skin being installed, skin
+// being replaced), so Khufra "Collector" is seven rows with one target — fold
+// them into a single card and let the base picker choose what gets replaced.
+function groupItems(list){
+  var map = Object.create(null), order = [];
+  list.forEach(function(it){
+    var k = it.hero + '\u0000' + it.skin;
+    var g = map[k];
+    if(!g){
+      g = map[k] = { key:k, hero:it.hero, skin:it.skin, toImg:it.toImg,
+                     heroImg:it.heroImg, inGame:it.inGame, bases:[] };
+      order.push(k);
+    }
+    if(it.inGame) g.inGame = true;
+    g.bases.push(it);
+  });
+  order.forEach(function(k){
+    map[k].bases.sort(function(a,b){
+      return String(a.base).localeCompare(String(b.base), undefined, {numeric:true});
+    });
+  });
+  return order.map(function(k){ return map[k]; });
+}
+
 function render(){
   var all = filterItems(state.items, state.q, state.hero);
-  var notYet = all.filter(function(it){ return !it.inGame; });
-  var hits = state.unverified ? all : all.filter(function(it){ return it.inGame; });
-  var toggle = notYet.length
+  var allGroups = groupItems(all);
+  var liveGroups = allGroups.filter(function(g){ return g.inGame; });
+  var groups = state.unverified ? allGroups : liveGroups;
+  var hideCount = allGroups.length - liveGroups.length;
+
+  var toggle = hideCount
     ? ' <button class="more" id="unv">' + (state.unverified
-        ? 'hide ' + notYet.length + ' not in game'
-        : '+' + notYet.length + ' not in game') + '</button>'
+        ? 'hide ' + hideCount + ' not in game'
+        : '+' + hideCount + ' not in game') + '</button>'
     : '';
   $('count').innerHTML = (state.hero
     ? '<span class="who">'+esc(state.hero)+' <button id="unhero">×</button></span> '
-    : '') + hits.length.toLocaleString()+' packs' + toggle;
+    : '') + groups.length.toLocaleString() + (groups.length === 1 ? ' skin' : ' skins') +
+    ' · ' + all.length.toLocaleString() + ' packs' + toggle;
   $('age').textContent = state.age
     ? 'updated '+Math.max(0,Math.round((Date.now()-state.age)/60000))+'m ago'
     : '';
 
-  if(!hits.length){
+  state.groups = groups;
+
+  if(!groups.length){
     $('list').innerHTML='<div class="empty">nothing matched in game.<br>try just a hero name.</div>' +
-      (notYet.length && !state.unverified ? '<button class="more" id="unv">show ' + notYet.length + ' not in game</button>' : '');
+      (hideCount && !state.unverified ? '<button class="more" id="unv">show ' + hideCount + ' not in game</button>' : '');
     return;
   }
-  var slice = hits.slice(0, state.shown);
+  var slice = groups.slice(0, state.shown);
   var tile = 'data:image/svg+xml,' + encodeURIComponent(
     '<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34"><rect width="34" height="34" fill="#172b45"/></svg>');
 
-  function icon(src, fallback){
+  function icon(src, fallback, cls){
     var f = fallback || tile;
-    return '<img loading="lazy" src="'+esc(bust(src||f))+
+    return '<img'+(cls?' class="'+cls+'"':'')+' loading="lazy" src="'+esc(bust(src||f))+
       '" onerror="this.onerror=null;this.src=\''+esc(bust(f))+'\'" alt="">';
   }
 
-  var html = slice.map(function(it){
+  var html = slice.map(function(g, i){
+    var it = g.bases[0];
     var fn = fileName(it.url);
-    var fb = it.heroImg || tile;
-    return '<div class="card">'+
+    var fb = g.heroImg || tile;
+    var opts = g.bases.map(function(b, bi){
+      return '<option value="'+bi+'"'+(bi===0?' selected':'')+'>'+esc(b.base)+'</option>';
+    }).join('');
+    return '<div class="card" data-i="'+i+'">'+
       '<div class="pair">'+
-        '<div class="cell">'+icon(it.fromImg, fb)+'<div class="lbl">from</div></div>'+
+        '<div class="cell">'+icon(it.fromImg, fb, 'fi')+'<div class="lbl">from</div></div>'+
         '<span class="arrow">›</span>'+
-        '<div class="cell">'+icon(it.toImg, fb)+'<div class="lbl">to</div></div>'+
+        '<div class="cell">'+icon(g.toImg, fb)+'<div class="lbl">to</div></div>'+
       '</div>'+
       '<div class="info">'+
-        '<div class="t1">'+esc(it.hero)+' — '+esc(it.skin)+'</div>'+
+        '<div class="t1">'+esc(g.hero)+' — '+esc(g.skin)+'</div>'+
         '<div class="t2">'+esc(fn)+'</div>'+
-        '<span class="tag">'+esc(it.base)+(it.mirror?' · mirror':'')+'</span>'+
-        (it.inGame?'':'<span class="tag warn">not in game</span>')+
+        '<select class="bsel" aria-label="replace which skin">'+opts+'</select>'+
+        '<span class="tag">'+g.bases.length+(g.bases.length===1?' base':' bases')+'</span>'+
+        (g.inGame?'':'<span class="tag warn">not in game</span>')+
       '</div>'+
       '<div class="acts">'+
         '<button class="dl" data-d="'+esc(it.url)+'" data-n="'+esc(fn)+'">download</button>'+
@@ -437,8 +475,8 @@ function render(){
       '</div>'+
     '</div>';
   }).join('');
-  if(hits.length > state.shown)
-    html += '<button class="more" id="more">show more ('+(hits.length-state.shown)+' left)</button>';
+  if(groups.length > state.shown)
+    html += '<button class="more" id="more">show more ('+(groups.length-state.shown)+' left)</button>';
   $('list').innerHTML = html;
 }
 
@@ -456,6 +494,27 @@ $('heroes').addEventListener('click', function(e){
   state.shown=60;
   renderHeroes(); render();
 });
+$('list').addEventListener('change', function(e){
+  var s = e.target.closest('.bsel'); if(!s) return;
+  var card = s.closest('.card'); if(!card) return;
+  var g = state.groups[+card.dataset.i]; if(!g) return;
+  var it = g.bases[+s.value]; if(!it) return;
+  var fn = fileName(it.url);
+  var img = card.querySelector('.fi');
+  if(img){
+    img.src = bust(it.fromImg || g.heroImg);
+    img.onerror = function(){
+      this.onerror = null;
+      this.src = bust(g.heroImg || img.src);
+    };
+  }
+  card.querySelector('.t2').textContent = fn;
+  var dl = card.querySelector('.dl');
+  dl.dataset.d = it.url;
+  dl.dataset.n = fn;
+  card.querySelector('.cp').dataset.u = it.url;
+});
+
 $('list').addEventListener('click', function(e){
   if(e.target.id === 'unhero'){
     state.hero=''; state.shown=60; renderHeroes(); render(); return;
