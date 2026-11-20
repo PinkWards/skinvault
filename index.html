@@ -133,7 +133,7 @@ var MANIFEST = 'https://cdn.jsdelivr.net/gh/injctr/updates@main/kio.json';
 // heroes, most of them on raw.githubusercontent (CORS-friendly). It fills the
 // gaps injctr leaves — a hero whose only target was Collector gets the rest.
 var MOLESKIN = 'https://cdn.jsdelivr.net/gh/MyMasWayVPN/moleskin@main/combined_manifest.json';
-var CACHE_KEY = 'skinvault.index.v15';     // v15 = dex-resolved names, dex-only faces
+var CACHE_KEY = 'skinvault.index.v16';     // v16 = base label follows the face, tier names resolved
 var HERO_ICONS = {};                       // default hero icons, loaded from heroes.json
 var HERO_ALIAS = { 'Lou Yi': 'Luo Yi' };   // manifest spelling -> wiki page spelling
 
@@ -261,19 +261,19 @@ function buildIndex(root){
     Object.keys(reps).forEach(function(baseKey){
       var base = reps[baseKey] || {};
       var rawBase = base.type1 || cleanNum(baseKey);
-      // the base is a skin too, and the manifest's own img1 names it when the
-      // label is an injector tier ("Elite 1") rather than a name
-      var baseName = resolveSkin(hero, rawBase, base.img1) || baseLabel(rawBase);
-      // the default skin is "Default" on every card, whatever the dex calls it
-      if(baseName !== 'Default' && skinPic(hero, baseName) === heroArt(hero)) baseName = 'Default';
-      var fromImg = basePic(hero, baseName) ||
-                    (isFace(base.img1) ? base.img1 : '') || heroArt(hero);
-
       [['type_links',''], ['second_link','mirror']].forEach(function(g){
         var tbl = base[g[0]] || {};
         Object.keys(tbl).forEach(function(skinKey){
           var url = tbl[skinKey];
           if(!isZip(url)) return;
+          // the base is a skin too, and the manifest's own img1 names it when
+          // the label is an injector tier ("Elite 1") rather than a name
+          var baseName = resolveBase(hero, rawBase, base.img1, url);
+          var fromImg = basePic(hero, baseName) ||
+                        (isFace(base.img1) ? base.img1 : '') || heroArt(hero);
+          // a base that shows the default face is the default base, whatever
+          // tier the packer filed it under
+          if(fromImg === heroArt(hero)) baseName = 'Default';
           var key = normName(cleanNum(skinKey));
           // the Skins table names the series; the zip filename is whatever the
           // packer typed (Khufta, Aldous Annual...). Trust the table first,
@@ -381,13 +381,13 @@ function buildMoleskin(root){
       skin = resolveSkin(hero, skin, s.img2 || s.img);
       if(!skin) return;
       var rawBase = isUp ? molName(s.skin_name) : 'Default';
-      var base = isUp ? (resolveSkin(hero, rawBase, s.img) || baseLabel(rawBase)) : 'Default';
-      if(base !== 'Default' && skinPic(hero, base) === heroArt(hero)) base = 'Default';
+      var base = isUp ? resolveBase(hero, rawBase, s.img, s.download) : 'Default';
       // a pack that installs X over X is not a swap
       if(normName(skin) === normName(base)) return;
       var toImg = skinPic(hero, skin);
       if(!toImg || toImg === heroArt(hero)) return;
       var fromImg = basePic(hero, base) || (isFace(s.img) ? s.img : '') || heroArt(hero);
+      if(fromImg === heroArt(hero)) base = 'Default';
       // moleskin sometimes hands back the same portrait for both sides; a card
       // that prints one face twice is worse than no card
       if(fromImg === toImg) return;
@@ -640,11 +640,67 @@ function realName(hero, skin){
 // typo ("Shadow Of Obscurity"), or the wiki's label ("Sanrio Characters").
 // Every one of those has to become the dex's spelling or the card is titled
 // something the game never shows. '' means "not a skin the game ships".
-function skinById(hero, art){
-  var m = String(art || '').match(/Hero(\d+)[-.]/);
+function skinFromArt(hero, art){
+  var a = String(art || '');
+  // the wiki writes the skin id into the filename; the dex writes it first in
+  // the basename. Either one names the skin without trusting any label.
+  var m = a.match(/Hero(\d+)[-.]/) ||
+          a.match(/(?:^|\/)(\d+)-[a-z0-9-]+\.(?:webp|png|jpg)(?:[?#]|$)/i);
   if(!m) return '';
-  var k = SKIN_ID[idKey(hero) + '/' + m[1]];
-  return k ? (SKIN_NAME[k] || k) : '';
+  var k = SKIN_ID[idKey(hero) + '/' + String(parseInt(m[1], 10))] ||
+          SKIN_ID[idKey(hero) + '/' + m[1]];
+  return k ? (SKIN_NAME[k] || '') : '';
+}
+function skinById(hero, art){ return skinFromArt(hero, art); }
+// a tier ("Elite", "Starlight 2023") is not a skin name
+var TIER_WORD = /^(collector|epic|elite|elite\s*\d|special|starlight|valentine|luckybox|legend|lightborn|basic|default|\d{4})$/i;
+function isTier(s){ return TIER_WORD.test(String(s || '').replace(/\s+/g, ' ').trim()); }
+// Moleskin writes the swap into the filename: "atlas elite2 to epic.zip".
+// When the row carries no base icon at all, that text is the only evidence of
+// which skin comes out, so it is read the same way a label is.
+function baseFromZip(hero, url){
+  var name = '';
+  try{
+    name = decodeURIComponent(String(url || '').split('?')[0].split('/').pop());
+  }catch(e){ return ''; }
+  name = name.replace(/\.zip$/i, '').replace(/[_+]+/g, ' ');
+  var m = name.match(/^(.*?)\s+to\s+(.*)$/i);
+  if(!m) return '';
+  var left = m[1].replace(/\s+/g, ' ').trim();
+  // drop the hero's own name from the front of the phrase
+  var hk = idKey(hero), words = left.split(' '), trimmed = left;
+  for(var i = 1; i <= words.length; i++){
+    var head = idKey(words.slice(0, i).join(''));
+    if(head && hk.indexOf(head) === 0){ trimmed = words.slice(i).join(' '); }
+  }
+  return trimmed === left ? left : trimmed;
+}
+// A base label is only as good as the face beside it. When the label is a bare
+// tier the pack's own img1 names the skin by id, so the label follows the art;
+// when there is no icon at all the filename is the next best witness.
+function resolveBase(hero, label, art, url){
+  var n = resolveSkin(hero, label, art);
+  if(!n || isTier(n)) n = skinFromArt(hero, art) || n;
+  if(!n || isTier(n)){
+    var fromZip = baseFromZip(hero, url);
+    if(fromZip){
+      var z = resolveSkin(hero, fromZip, '');
+      if(z && !isTier(z)) n = z;
+    }
+  }
+  if(!n) n = baseLabel(label);
+  if(n !== 'Default' && skinPic(hero, n) === heroArt(hero)) n = 'Default';
+  return n;
+}
+// injector packs number a tier ("Elite 2") meaning the second Elite skin for
+// that hero, in release order. The dex keeps them in id order, so the index is
+// the count.
+function tierNth(hero, label, n){
+  var list = TIER_LIST[idKey(hero)] || [], out = [];
+  for(var i = 0; i < list.length; i++) if(list[i][0] === idKey(label)) out.push(list[i][2]);
+  if(n < 1 || n > out.length) return '';
+  var k = out[n - 1];
+  return k ? (SKIN_NAME[k] || '') : '';
 }
 function tierName(hero, label, year, cmp){
   var list = TIER_LIST[idKey(hero)] || [];
@@ -662,11 +718,21 @@ function resolveSkin(hero, name, art){
   if(PORTRAIT[h + '/' + k]) return SKIN_NAME[k] || name;
   var m = k.match(/^(.+?)(20\d\d)$/);
   var label = m ? m[1] : k, year = m ? m[2] : '';
+  // numbered tier first: "Elite 2" names one skin exactly
+  var nth = k.match(/^(.+?)(\d{1,2})$/);
+  if(nth && isTier(nth[1])){
+    var pick = tierNth(hero, nth[1], parseInt(nth[2], 10));
+    if(pick && PORTRAIT[h + '/' + idKey(pick)]) return pick;
+  }
   var hit =
     tierName(hero, label, year, function(a, b){ return a === b; }) ||
     tierName(hero, label, year, function(a, b){ return a.indexOf(b) === 0; }) ||
     tierName(hero, label, year, function(a, b){ return b.length >= 4 && a.indexOf(b) !== -1; }) ||
-    tierName(hero, label, year, function(a, b){ return a.length >= 4 && b.indexOf(a) !== -1; });
+    tierName(hero, label, year, function(a, b){ return a.length >= 4 && b.indexOf(a) !== -1; }) ||
+    // "FMVP" is the initials of "Finals MVP": no vowels, every letter in order
+    tierName(hero, label, year, function(a, b){
+      return /^[bcdfghjklmnpqrstvwxz0-9]{3,6}$/i.test(b) && subsequence(a, b);
+    });
   if(hit && PORTRAIT[h + '/' + idKey(hit)]) return hit;
   // the wiki file names the skin by id even when the text around it does not
   var byId = skinById(hero, art);
@@ -826,6 +892,16 @@ function oneLetterOff(a, b){
   if(Math.abs(a.length - b.length) > budget) return false;
   var dist = editDistance(a, b);
   return dist > 0 && dist <= budget;
+}
+// Every letter of b appears in a in order ("fmvp" inside "finalsmvp").
+function subsequence(a, b){
+  if(!b) return false;
+  var i = 0, j = 0;
+  while(i < a.length && j < b.length){
+    if(a.charAt(i) === b.charAt(j)) j++;
+    i++;
+  }
+  return j === b.length;
 }
 function editDistance(a, b){
   var prev = [], cur = [], i, j;
