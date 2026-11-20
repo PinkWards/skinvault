@@ -137,7 +137,7 @@ var MANIFEST = 'https://cdn.jsdelivr.net/gh/injctr/updates@main/kio.json';
 // heroes, most of them on raw.githubusercontent (CORS-friendly). It fills the
 // gaps injctr leaves — a hero whose only target was Collector gets the rest.
 var MOLESKIN = 'https://cdn.jsdelivr.net/gh/MyMasWayVPN/moleskin@main/combined_manifest.json';
-var CACHE_KEY = 'skinvault.index.v19';     // v19 = installable PWA, dead-host mirrors refused
+var CACHE_KEY = 'skinvault.index.v21';     // v21 = one shell cache key, CDN mirror, offline archive shelf, self-test
 var HERO_ICONS = {};                       // default hero icons, loaded from heroes.json
 var HERO_ALIAS = { 'Lou Yi': 'Luo Yi' };   // manifest spelling -> wiki page spelling
 
@@ -193,10 +193,16 @@ function isInGame(hero, skin){
 // from that: Khufra - Gentleman Thief (over Default).zip
 function zipName(hero, skin, base){
   var over = base && !/^default$/i.test(base) ? ' (over ' + base + ')' : '';
-  return (hero + ' - ' + skin + over + '.zip')
-    .replace(/[\\/:*?"<>|]+/g, '-')
+  // Android's document picker refuses a name over 255 bytes and quietly drops
+  // trailing dots and spaces, so the stem is bounded and both ends are trimmed
+  // before the extension goes on. Control characters are stripped with the rest.
+  var stem = (hero + ' - ' + skin + over)
+    .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]+/g, '-')
     .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/^[\s.\-]+/, '')
+    .slice(0, 120)
+    .replace(/[\s.\-]+$/, '');
+  return (stem || 'skin') + '.zip';
 }
 function fileName(u){
   try { return decodeURIComponent(new URL(u).pathname.split('/').pop()) || 'skin.zip'; }
@@ -442,6 +448,76 @@ function buildMoleskin(root){
 // tie: cleaner names, and its links live on raw.githubusercontent, which the
 // in-app download can fetch without a CORS fight. Its base labels also win —
 // moleskin's "Starlight" is the same slot injctr calls "Starlight 2021".
+// --- third shelf: injctr's archive repos ------------------------------------
+// These repos ship packs but no manifest. The filename is the manifest:
+// "<Hero> <Skin> - <Base>.zip". Hero is matched word by word, never as a
+// substring, so "Aamon" cannot be shaved off "Aamonn" and the skin name keeps
+// its first letter.
+var EXTRA = 'extra.json';
+var EXTRA_ALIAS = {
+  'carmila': 'Carmilla', 'change': "Chang'e", 'chang e': "Chang'e",
+  'gatot': 'Gatotkaca', 'gatotkaca': 'Gatotkaca', 'lapu lapu': 'Lapu-Lapu',
+  'lou yi': 'Luo Yi', 'louyi': 'Luo Yi', 'luo yi': 'Luo Yi',
+  'oddete': 'Odette', 'popol kupa': 'Popol and Kupa', 'popol': 'Popol and Kupa',
+  'xborg': 'X.Borg', 'x borg': 'X.Borg', 'yss': 'Yi Sun-shin',
+  'silvana': 'Silvanna', 'silvanna': 'Silvanna'
+};
+var EXTRA_ALIAS_ID = Object.create(null);
+Object.keys(EXTRA_ALIAS).forEach(function(k){ EXTRA_ALIAS_ID[idKey(k)] = EXTRA_ALIAS[k]; });
+
+// Returns the hero and how many characters of the row its name consumed.
+function heroFromName(left, byKey){
+  var words = String(left || '').split(/\s+/).filter(Boolean);
+  var max = Math.min(4, words.length - 1);
+  for(var n = max; n >= 1; n--){
+    var head = words.slice(0, n).join(' ');
+    var h = byKey[idKey(head)];
+    if(h) return { hero: h, cut: head.length };
+    var a = EXTRA_ALIAS_ID[idKey(head)];
+    if(a) return { hero: a, cut: head.length };
+  }
+  return null;
+}
+
+function buildExtra(rows, heroes){
+  var out = [], byKey = Object.create(null);
+  (heroes || []).forEach(function(h){ byKey[idKey(h)] = h; });
+  (rows || []).forEach(function(r){
+    var left = String(r.left || '').trim();
+    var rawBase = String(r.base || '').trim();
+    if(!left || !rawBase || !/^https?:/i.test(String(r.url || ''))) return;
+    var hit = heroFromName(left, byKey);
+    if(!hit) return;
+    var hero = hit.hero;
+    var skinRaw = left.slice(hit.cut).trim();
+    if(!skinRaw) return;
+    var name = resolveSkin(hero, skinRaw, '');
+    if(!name || isTier(name)) return;
+    var toImg = skinPic(hero, name);
+    if(!toImg || toImg === heroArt(hero)) return;
+    var base = resolveBase(hero, rawBase, '', r.url);
+    var fromImg = faceFor(hero, base, '');
+    // the face decides: a base drawn with the default art is the default base
+    if(fromImg === heroArt(hero)) base = 'Default';
+    if(fromImg === toImg) return;
+    if(faceId(hero, fromImg) && faceId(hero, fromImg) === faceId(hero, toImg)) return;
+    out.push({
+      hero: hero,
+      skin: name,
+      base: base,
+      url: r.url,
+      fromImg: fromImg,
+      toImg: toImg,
+      inGame: isInGame(hero, name),
+      heroImg: portraitUrl(HERO_DEFAULT[idKey(hero)]) || '',
+      group: 'Skin',
+      mirror: '',
+      src: 'extra'
+    });
+  });
+  return slotDedupe(out);
+}
+
 function mergeIndex(primary, extra){
   var out = primary.slice();
   var seen = Object.create(null);
@@ -870,15 +946,23 @@ async function fetchJson(u){
 }
 
 async function refresh(){
+  if(refresh.busy) return;                 // a second tap must not build twice
+  refresh.busy = true;
+  try{ await runRefresh(); }
+  finally{ refresh.busy = false; }
+}
+
+async function runRefresh(){
   await loadHeroIcons();
   await loadReleased();
   say('fetching catalog…', true);
   var items = null, note = '';
 
-  // Both shelves in one go; moleskin is optional, injctr is not.
+  // Three shelves in one go; injctr is required, the other two are stock.
   var both = await Promise.allSettled([
     fetchJson(MANIFEST + '?t=' + Date.now()),
-    fetchJson(MOLESKIN + '?t=' + Date.now())
+    fetchJson(MOLESKIN + '?t=' + Date.now()),
+    fetchJson(EXTRA)
   ]);
 
   try{
@@ -888,7 +972,7 @@ async function refresh(){
     var local = baked('manifest');
     if(local){ items = buildIndex(local); note = ' (offline manifest)'; }
   }
-  var molCount = 0;
+  var molCount = 0, extraCount = 0;
   if(items){
     markReal(items);
     if(both[1].status === 'fulfilled'){
@@ -897,6 +981,15 @@ async function refresh(){
       if(molCount) note += ' · ' + molCount + ' from moleskin';
     }else{
       note += ' (moleskin offline)';
+    }
+    if(both[2].status === 'fulfilled'){
+      // Seed from the game's own roster, not just the shelf: an archive-only
+      // hero has no kio row to borrow a spelling from, and heroes.json has it.
+      var heroes = Object.keys(HERO_ICONS);
+      items.forEach(function(x){ if(heroes.indexOf(x.hero) === -1) heroes.push(x.hero); });
+      items = mergeIndex(items, buildExtra(both[2].value, heroes));
+      extraCount = items.filter(function(x){ return x.src === 'extra'; }).length;
+      if(extraCount) note += ' · ' + extraCount + ' from archive';
     }
   }
 
@@ -1229,6 +1322,15 @@ function noCors(u){
   return /^https?:\/\/github\.com\/[^/]+\/[^/]+\/releases\/download\//.test(String(u || ''));
 }
 
+// jsDelivr re-serves a GitHub raw file from its own CDN, with CORS headers, so
+// a pack it holds is not dependent on GitHub at all. It refuses any file over
+// 20 MB with a 403, which means "this file", never "this CDN" — see SOFT_HOST.
+function jsdUrl(u){
+  var m = String(u || '').match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/raw\/([^/]+)\/(.+)$/);
+  if(!m) return '';
+  return 'https://cdn.jsdelivr.net/gh/' + m[1] + '/' + m[2] + '@' + m[3] + '/' + m[4];
+}
+
 function handOff(url, name, btn, old){
   var f = document.createElement('iframe');
   f.style.display = 'none';
@@ -1242,9 +1344,15 @@ function handOff(url, name, btn, old){
 
 // One URL in, one blob out, with the percent painted on the button. Throws on
 // anything that is not a complete read, so the caller can try the next source.
+function zipErr(status, msg){
+  var e = new Error(msg);
+  e.status = status || 0;
+  return e;
+}
+
 async function pullZip(url, btn){
   var r = await fetch(rawUrl(url), {mode:'cors', cache:'no-store'});
-  if(!r.ok) throw new Error('HTTP ' + r.status);
+  if(!r.ok) throw zipErr(r.status, 'HTTP ' + r.status);
   var total = parseInt(r.headers.get('content-length') || '0', 10) || 0;
   if(r.body && r.body.getReader){
     var reader = r.body.getReader(), chunks = [], got = 0;
@@ -1258,12 +1366,12 @@ async function pullZip(url, btn){
         : (got / 1048576).toFixed(1) + ' MB';
     }
     // a truncated body is a dead link wearing a 200
-    if(total && got !== total) throw new Error('short read ' + got + '/' + total);
-    if(!got) throw new Error('empty body');
+    if(total && got !== total) throw zipErr(0, 'short read ' + got + '/' + total);
+    if(!got) throw zipErr(0, 'empty body');
     return new Blob(chunks, {type:'application/zip'});
   }
   var blob = await r.blob();
-  if(!blob.size) throw new Error('empty body');
+  if(!blob.size) throw zipErr(0, 'empty body');
   return blob;
 }
 
@@ -1273,12 +1381,15 @@ async function pullZip(url, btn){
 // One failed attempt is evidence. A host that answered 402 does not get a
 // second chance this session; a single URL that 404s is skipped by address.
 var DEAD_URL = Object.create(null), DEAD_HOST = Object.create(null);
+// A CDN answers 403 for one file above its size cap. That is evidence about the
+// URL and none at all about the rest of the host, so it never kills the host.
+var SOFT_HOST = /^cdn\.jsdelivr\.net$/i;
 function hostOf(u){
   try{ return new URL(u).host; }catch(e){ return ''; }
 }
 function markDead(u, err){
-  var code = parseInt(String(err && err.message || '').replace(/\D+/g, ''), 10) || 0;
-  if(code === 402 || code === 403 || code === 410) DEAD_HOST[hostOf(u)] = 1;
+  var code = (err && err.status) || 0;
+  if((code === 402 || code === 403 || code === 410) && !SOFT_HOST.test(hostOf(u))) DEAD_HOST[hostOf(u)] = 1;
   DEAD_URL[u] = 1;
 }
 function usable(u){
@@ -1287,8 +1398,11 @@ function usable(u){
 
 async function saveZip(url, name, btn, alt){
   var old = btn.textContent;
-  var sources = [url];
-  if(alt && alt !== url) sources.push(alt);
+  // published URL, its published mirror, then the same two through the CDN.
+  var sources = [];
+  [url, alt, jsdUrl(url), jsdUrl(alt)].forEach(function(u){
+    if(u && /^https?:/i.test(u) && sources.indexOf(u) === -1) sources.push(u);
+  });
   btn.disabled = true;
   btn.textContent = '0%';
   try{
@@ -1311,8 +1425,20 @@ async function saveZip(url, name, btn, alt){
     toast('saved ' + (name || 'skin.zip'));
     setTimeout(function(){ btn.textContent = old; btn.disabled = false; }, 4000);
   }catch(err){
-    // last resort: hand the URL to the browser's downloader without leaving the page
-    handOff(sources[sources.length - 1], name, btn, old);
+    // Last resort: the browser's own downloader, through a hidden frame, so the
+    // page never navigates. A GitHub release asset is the one kind of URL that
+    // downloader can read, so it is preferred over a raw blob that already failed.
+    var fallback = '';
+    for(var j = 0; j < sources.length; j++){
+      if(/cdn\.jsdelivr\.net/i.test(sources[j])) continue;
+      if(noCors(sources[j])) fallback = sources[j];
+    }
+    if(!fallback){
+      for(var k = sources.length - 1; k >= 0; k--){
+        if(!/cdn\.jsdelivr\.net/i.test(sources[k])){ fallback = sources[k]; break; }
+      }
+    }
+    handOff(fallback || url, name, btn, old);
   }
 }
 
@@ -1353,6 +1479,14 @@ window.addEventListener('pointercancel', function(){ drag.on = false; strip.clas
 
 $('refresh').addEventListener('click', function(){ refresh(); });
 
+// "updated 3m ago" has to keep counting while the page sits open, otherwise it
+// reads as a stale shelf when the shelf is fine.
+setInterval(function(){
+  if(!state.age) return;
+  var m = Math.max(0, Math.round((Date.now() - state.age) / 60000));
+  $('age').textContent = m < 1 ? 'updated just now' : 'updated ' + m + 'm ago';
+}, 30000);
+
 document.addEventListener('click', function(e){
   if(e.target && e.target.id === 'unv'){
     state.unverified = !state.unverified;
@@ -1377,6 +1511,113 @@ if('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
   window.addEventListener('load', function(){
     navigator.serviceWorker.register('sw.js', {scope:'./'}).catch(function(){});
   });
+}
+</script>
+<script>
+// --- self-test ------------------------------------------------------------
+// ?debug=1 pins these results over the page. window.__vaultAudit() returns the
+// same object for a scripted sweep, with no panel.
+function vaultAudit(){
+  var items = state.items, g = groupItems(items), bad = [], add = function(){};
+  var F = function(hero, art){ var n = skinFromArt(hero, art); return n ? idKey(n) : ''; };
+  var dupCard = [], dupBase = [], sameFace = [], nonDex = [], fromEqTo = [],
+      toIsDefault = [], badName = [], nameSeen = {}, dupName = [], mirrorBad = [],
+      blank = [], heroDefaultSame = [];
+  g.forEach(function(c){
+    var k = idKey(c.hero) + '|' + normName(c.skin);
+    if(nameSeen[k]) dupCard.push(c.hero + ' \u2014 ' + c.skin);
+    nameSeen[k] = 1;
+    if(!c.hero || !c.skin) blank.push(String(c.hero) + ' \u2014 ' + String(c.skin));
+    if(c.toImg && !/mlbbdex\.com\/visuels\/heros\/[^/]+\/skins\//.test(c.toImg)) nonDex.push(c.hero + ' \u2014 ' + c.skin);
+    if(c.toImg && c.toImg === heroArt(c.hero)) toIsDefault.push(c.hero + ' \u2014 ' + c.skin);
+    var seen = {};
+    c.bases.forEach(function(b){
+      var bk = normName(b.base);
+      if(seen[bk]) dupBase.push(c.hero + ' \u2014 ' + c.skin + ' / ' + b.base);
+      seen[bk] = 1;
+      var tf = F(c.hero, c.toImg), ff = F(c.hero, b.fromImg);
+      if(tf && ff && tf === ff) sameFace.push(c.hero + ' \u2014 ' + c.skin + ' / ' + b.base);
+      if(b.fromImg && c.toImg && b.fromImg === c.toImg) fromEqTo.push(c.hero + ' \u2014 ' + c.skin + ' / ' + b.base);
+      if(b.mirror && (!/^https?:/i.test(b.mirror) || b.mirror === b.url)) mirrorBad.push(c.hero + ' \u2014 ' + c.skin + ' / ' + b.base);
+      var n = zipName(c.hero, c.skin, b.base);
+      if(n.length > 128 || !/\.zip$/.test(n) || /[\u0000-\u001f]/.test(n)) badName.push(n);
+      if(nameSeen['n|' + n]) dupName.push(n);
+      nameSeen['n|' + n] = 1;
+    });
+  });
+  function line(label, list, detail){
+    return { label: label, n: list.length, ok: list.length === 0, sample: detail ? list.slice(0, detail) : [] };
+  }
+  var noCorsBare = items.filter(function(i){ return noCors(i.url) && !(i.mirror && /^https?:/i.test(i.mirror)); });
+  var cdn = items.filter(function(i){ return jsdUrl(i.url); });
+  var reg = null;
+  try{ reg = navigator.serviceWorker && navigator.serviceWorker.controller; }catch(e){}
+  var man = document.querySelector('link[rel="manifest"]');
+  var checks = [
+    line('duplicate cards (same hero + skin twice)', dupCard, 5),
+    line('a card lists one base twice', dupBase, 5),
+    line('two faces of the same skin on one card', sameFace, 5),
+    line('from and to are the same picture', fromEqTo, 5),
+    line('card face is the hero default, not a skin', toIsDefault, 5),
+    line('face is not dex art', nonDex, 5),
+    line('filename a phone would refuse', badName, 5),
+    line('two packs share one filename', dupName, 5),
+    line('mirror is not a usable URL', mirrorBad, 5),
+    line('card has no hero or no skin name', blank, 5)
+  ];
+  return {
+    built: new Date().toISOString(),
+    cache: CACHE_KEY,
+    shelf: { packs: items.length, cards: g.length, heroes: new Set(items.map(function(i){ return i.hero; })).size },
+    sources: {
+      primary: items.filter(function(i){ return !i.src; }).length,
+      moleskin: items.filter(function(i){ return i.src === 'moleskin'; }).length,
+      archive: items.filter(function(i){ return i.src === 'extra'; }).length
+    },
+    links: {
+      mirrors: items.filter(function(i){ return i.mirror; }).length,
+      cdnMirrorable: cdn.length,
+      releaseOnly: noCorsBare.length
+    },
+    pwa: {
+      manifest: !!man,
+      worker: !!reg,
+      controlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller)
+    },
+    checks: checks,
+    failed: checks.filter(function(c){ return !c.ok; }).length
+  };
+}
+window.__vaultAudit = vaultAudit;
+
+if(/[?&]debug=1/.test(location.search)){
+  var tries = 0;
+  var run = function(){
+    if(!state.items.length && tries++ < 60) return setTimeout(run, 800);
+    if(!state.items.length) return;
+    var r = vaultAudit();
+    var box = document.createElement('div');
+    box.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;max-height:55vh;overflow:auto;' +
+      'background:#06101d;color:#d8e6f7;border-top:1px solid #1d3a5c;font:12px/1.45 ui-monospace,Menlo,monospace;padding:10px 12px';
+    var rows = r.checks.map(function(c){
+      return '<div style="color:' + (c.ok ? '#6ee7a8' : '#ff6b81') + '">' +
+        (c.ok ? '\u2713 ' : '\u2717 ') + c.n + '  ' + c.label +
+        (c.sample.length ? '<div style="color:#8ba6c4;padding-left:16px">' + esc(c.sample.join(' · ')) + '</div>' : '') +
+        '</div>';
+    }).join('');
+    box.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+        '<b>' + r.shelf.cards + ' cards · ' + r.shelf.packs + ' packs · ' + r.shelf.heroes + ' heroes · ' +
+        (r.failed ? r.failed + ' failing' : 'all clear') + '</b>' +
+        '<button id="dbgx" style="background:#12253c;color:#d8e6f7;border:1px solid #1d3a5c;border-radius:6px;padding:2px 8px">close</button></div>' +
+      '<div style="color:#8ba6c4;margin-bottom:8px">' + esc(r.cache) + ' · sources ' + r.sources.primary + '/' +
+        r.sources.moleskin + '/' + r.sources.archive + ' · mirrors ' + r.links.mirrors +
+        ' · cdn ' + r.links.cdnMirrorable + ' · release-only ' + r.links.releaseOnly +
+        ' · manifest ' + (r.pwa.manifest ? 'yes' : 'no') + ' · worker ' + (r.pwa.controlled ? 'active' : 'no') + '</div>' +
+      rows;
+    document.body.appendChild(box);
+    box.querySelector('#dbgx').onclick = function(){ box.remove(); };
+  };
+  run();
 }
 </script>
 </body>
