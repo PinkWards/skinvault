@@ -131,7 +131,7 @@ var MANIFEST = 'https://cdn.jsdelivr.net/gh/injctr/updates@main/kio.json';
 // heroes, most of them on raw.githubusercontent (CORS-friendly). It fills the
 // gaps injctr leaves — a hero whose only target was Collector gets the rest.
 var MOLESKIN = 'https://cdn.jsdelivr.net/gh/MyMasWayVPN/moleskin@main/combined_manifest.json';
-var CACHE_KEY = 'skinvault.index.v7';      // v7 = injctr + moleskin merged
+var CACHE_KEY = 'skinvault.index.v8';      // v8 = injctr + moleskin, typos folded
 var HERO_ICONS = {};                       // default hero icons, loaded from heroes.json
 var HERO_ALIAS = { 'Lou Yi': 'Luo Yi' };   // manifest spelling -> wiki page spelling
 
@@ -290,7 +290,12 @@ var MOL_ALIAS = {
   'star': 'Starlight', 'star 2': 'Starlight 2', 'star2': 'Starlight 2',
   'annual star': 'Annual Starlight', 'default skin': 'Default',
   'msc': 'MSC', 'kof': 'KOF', 'jjk': 'JJK', 'aot': 'AOT',
-  'm1': 'M1', 'm2': 'M2', 'm3': 'M3', 'msc 2033': 'MSC 2023'
+  'm1': 'M1', 'm2': 'M2', 'm3': 'M3', 'msc 2033': 'MSC 2023',
+  // the same skin spelled two ways across the two shelves; folding here is
+  // cheaper and safer than fuzzy-matching card titles
+  'fvmp': 'FMVP', 'fmvp': 'FMVP',
+  'misbender': 'Mistbender', 'mistbenders': 'Mistbender',
+  'transformerd': 'Transformers', 'transformes': 'Transformers'
 };
 function molName(s){
   var t = titleName(s);
@@ -564,13 +569,54 @@ function renderHeroes(){
 // One card per skin. The manifest ships a pack per (skin being installed, skin
 // being replaced), so Khufra "Collector" is seven rows with one target — fold
 // them into a single card and let the base picker choose what gets replaced.
+// Two labels that differ by a single letter are the same skin spelled twice
+// ("Mistbender"/"Mistbenders", "Transformers"/"Transformes"); fold those too,
+// but never across digits, so "Starlight" and "Starlight 2" stay apart.
+function oneLetterOff(a, b){
+  if(!a || !b) return false;
+  if(/\d/.test(a) || /\d/.test(b)) return false;
+  // longer names tolerate a second typo; short ones must be a single edit apart
+  var budget = (a.length >= 9 && b.length >= 9) ? 2 : 1;
+  if(Math.abs(a.length - b.length) > budget) return false;
+  var dist = editDistance(a, b);
+  return dist > 0 && dist <= budget;
+}
+function editDistance(a, b){
+  var prev = [], cur = [], i, j;
+  for(j = 0; j <= b.length; j++) prev[j] = j;
+  for(i = 1; i <= a.length; i++){
+    cur[0] = i;
+    for(j = 1; j <= b.length; j++){
+      cur[j] = Math.min(prev[j] + 1, cur[j-1] + 1, prev[j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+    }
+    for(j = 0; j <= b.length; j++) prev[j] = cur[j];
+  }
+  return prev[b.length];
+}
+
+// Spelled differently by each shelf but the same skin. Keyed by idKey, so the
+// map applies to whatever case and punctuation the source used.
+var SKIN_CANON = {
+  misbender: 'Mistbender', mistbender: 'Mistbender',
+  transformerd: 'Transformers', transformes: 'Transformers',
+  fvmp: 'FMVP', fmvp: 'FMVP'
+};
+
 function groupItems(list){
-  var map = Object.create(null), order = [];
+  var map = Object.create(null), order = [], canon = Object.create(null);
   list.forEach(function(it){
-    var k = it.hero + '\u0000' + it.skin;
+    var nm = SKIN_CANON[idKey(it.skin)] || normName(it.skin);
+    var label = SKIN_CANON[idKey(it.skin)] || it.skin;
+    var seenList = canon[it.hero] || (canon[it.hero] = []);
+    var hit = null;
+    for(var i = 0; i < seenList.length; i++){
+      if(seenList[i].nm === nm || oneLetterOff(seenList[i].nm, nm)){ hit = seenList[i]; break; }
+    }
+    if(!hit){ hit = { nm: nm, label: label }; seenList.push(hit); }
+    var k = it.hero + '\u0000' + hit.label;
     var g = map[k];
     if(!g){
-      g = map[k] = { key:k, hero:it.hero, skin:it.skin, toImg:it.toImg,
+      g = map[k] = { key:k, hero:it.hero, skin:hit.label, toImg:it.toImg,
                      heroImg:it.heroImg, inGame:it.inGame, bases:[] };
       order.push(k);
     }
